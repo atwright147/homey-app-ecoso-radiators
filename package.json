@@ -1,0 +1,27 @@
+{
+  "name": "ecoso-rads",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "discover": "ts-node src/index.ts discover",
+    "state":    "ts-node src/index.ts state",
+    "on":       "ts-node src/index.ts on",
+    "off":      "ts-node src/index.ts off",
+    "build":    "tsc",
+    "scan":     ".venv/bin/python3 -m tinytuya scan",
+    "get-keys": ".venv/bin/python3 get-keys.py"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "tuyapi": "^7.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2"
+  }
+}

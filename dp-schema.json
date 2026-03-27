@@ -1,0 +1,65 @@
+{
+  "result": {
+    "properties": [
+      {
+        "code": "Switch",
+        "custom_name": "",
+        "dp_id": 1,
+        "time": 1766591988529,
+        "type": "bool",
+        "value": true
+      },
+      {
+        "code": "Lock",
+        "custom_name": "",
+        "dp_id": 2,
+        "time": 1766591988529,
+        "type": "bool",
+        "value": false
+      },
+      {
+        "code": "Temp_set",
+        "custom_name": "",
+        "dp_id": 3,
+        "time": 1766592004773,
+        "type": "value",
+        "value": 14
+      },
+      {
+        "code": "Temp_current",
+        "custom_name": "",
+        "dp_id": 4,
+        "time": 1766601728686,
+        "type": "value",
+        "value": 13
+      },
+      {
+        "code": "Timer",
+        "custom_name": "",
+        "dp_id": 5,
+        "time": 1766591988529,
+        "type": "value",
+        "value": 0
+      },
+      {
+        "code": "FAULT",
+        "custom_name": "",
+        "dp_id": 6,
+        "time": 1766051594911,
+        "type": "bitmap",
+        "value": 0
+      },
+      {
+        "code": "Mode",
+        "custom_name": "",
+        "dp_id": 7,
+        "time": 1766591988529,
+        "type": "enum",
+        "value": "High"
+      }
+    ]
+  },
+  "success": true,
+  "t": 1766602278018,
+  "tid": "87db96efe0f911f091dbb67f4af8076d"
+}

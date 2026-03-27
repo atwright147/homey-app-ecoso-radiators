@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Python virtualenv
+.venv/
+
+# Secrets — contains device local_keys, never commit
+devices.json
+
+# tinytuya scan output (may contain device IDs)
+snapshot.json
+tinytuya.json
+devices.json.bak
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+*.swp
