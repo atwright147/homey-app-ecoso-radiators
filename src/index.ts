@@ -1,58 +1,110 @@
 /**
- * index.ts — CLI demo for ECOSO Torr local control
+ * index.ts — CLI test harness for ECOSO Torr local control
  *
- * Usage (after filling in local keys in devices.json):
+ * Target one or both heaters with --device 1 | --device 2 | (omit = both)
  *
- *   # Discover raw DPs (always run this first):
- *   npx ts-node src/index.ts discover
+ * Commands:
+ *   discover                   Dump raw DP map
+ *   state                      Read full device state
+ *   on                         Power on
+ *   off                        Power off
+ *   temp <°C>                  Set target temperature  (e.g. temp 21)
+ *   mode low|high              Set power mode
+ *   lock                       Enable child lock
+ *   unlock                     Disable child lock
  *
- *   # Read current state:
+ * Examples:
  *   npx ts-node src/index.ts state
- *
- *   # Turn on / off:
- *   npx ts-node src/index.ts on
- *   npx ts-node src/index.ts off
- *
- *   # Set target temperature (°C):
- *   npx ts-node src/index.ts temp 21.5
+ *   npx ts-node src/index.ts --device 1 temp 20
+ *   npx ts-node src/index.ts --device 2 mode high
+ *   npx ts-node src/index.ts lock
  */
 
-import { EcosoHeater, HeaterConfig } from './heater';
+import { EcosoHeater, HeaterConfig, HeaterMode } from './heater';
 import devicesJson from '../devices.json';
 
-// ── Build heater instances from devices.json ──────────────────────────────────
+// ── Parse --device flag ───────────────────────────────────────────────────────
 
-const heaters: EcosoHeater[] = (devicesJson.devices as HeaterConfig[]).map(
+const argv = process.argv.slice(2);
+let deviceFilter: number | null = null;
+const filteredArgv: string[] = [];
+
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === '--device' && argv[i + 1]) {
+    deviceFilter = parseInt(argv[++i], 10);
+  } else {
+    filteredArgv.push(argv[i]);
+  }
+}
+
+const [command, ...args] = filteredArgv;
+
+// ── Build heater instances ────────────────────────────────────────────────────
+
+const allHeaters: EcosoHeater[] = (devicesJson.devices as HeaterConfig[]).map(
   (cfg) => new EcosoHeater(cfg),
 );
 
-// ── CLI dispatch ──────────────────────────────────────────────────────────────
+const heaters =
+  deviceFilter != null ? [allHeaters[deviceFilter - 1]].filter(Boolean) : allHeaters;
 
-const [, , command, ...args] = process.argv;
+if (heaters.length === 0) {
+  console.error(`No device at index ${deviceFilter}. Available: 1–${allHeaters.length}`);
+  process.exit(1);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function printState(name: string, s: Awaited<ReturnType<EcosoHeater['getState']>>): void {
+  console.log(`\n── ${name} ──`);
+  console.log(`  Power        : ${s.power ?? 'unknown'}`);
+  console.log(`  Mode         : ${s.mode ?? 'unknown'}`);
+  console.log(`  Target temp  : ${s.targetTempC  != null ? s.targetTempC  + ' °C' : 'unknown'}`);
+  console.log(`  Current temp : ${s.currentTempC != null ? s.currentTempC + ' °C' : 'unknown'}`);
+  console.log(`  Child lock   : ${s.childLock ?? 'unknown'}`);
+}
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+/** Delay between set and getState so the device's broadcast clears. */
+const READBACK_DELAY_MS = 1000;
+
+function usage(): never {
+  console.error(`
+ECOSO Torr — test harness
+
+  npx ts-node src/index.ts [--device 1|2] <command> [args]
+
+Commands:
+  discover           Dump raw DP values
+  state              Read full state
+  on / off           Power on / off
+  temp <°C>          Set target temperature
+  mode low|high      Set power mode
+  lock / unlock      Enable / disable child lock
+`);
+  process.exit(1);
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   switch (command) {
 
     case 'state': {
       for (const h of heaters) {
-        console.log(`\n── ${h.name} ──`);
-        const state = await h.getState();
-        console.log(`  Power        : ${state.power ?? 'unknown'}`);
-        console.log(`  Mode         : ${state.mode ?? 'unknown'}`);
-        console.log(`  Target temp  : ${state.targetTempC != null ? state.targetTempC + ' °C' : 'unknown'}`);
-        console.log(`  Current temp : ${state.currentTempC != null ? state.currentTempC + ' °C' : 'not reported'}`);
-        console.log(`  Child lock   : ${state.childLock ?? 'unknown'}`);
+        printState(h.name, await h.getState());
       }
       break;
     }
 
     case 'on':
     case 'off': {
-      const power = command === 'on';
       for (const h of heaters) {
-        console.log(`Turning ${command} ${h.name}…`);
-        await h.setPower(power);
-        console.log(`  Done.`);
+        console.log(`[${h.name}] turning ${command}…`);
+        await h.setPower(command === 'on');
+        await sleep(READBACK_DELAY_MS);
+        printState(h.name, await h.getState());
       }
       break;
     }
@@ -60,13 +112,42 @@ async function main(): Promise<void> {
     case 'temp': {
       const tempC = parseFloat(args[0] ?? '');
       if (Number.isNaN(tempC)) {
-        console.error('Usage: npx ts-node src/index.ts temp <degrees>');
+        console.error('Usage: temp <degrees>  e.g. temp 21');
         process.exit(1);
       }
       for (const h of heaters) {
-        console.log(`Setting ${h.name} → ${tempC} °C…`);
+        console.log(`[${h.name}] setting target → ${Math.round(tempC)} °C…`);
         await h.setTargetTemp(tempC);
-        console.log(`  Done.`);
+        await sleep(READBACK_DELAY_MS);
+        printState(h.name, await h.getState());
+      }
+      break;
+    }
+
+    case 'mode': {
+      const raw = (args[0] ?? '').toLowerCase();
+      if (raw !== 'low' && raw !== 'high') {
+        console.error('Usage: mode low|high');
+        process.exit(1);
+      }
+      const mode = (raw.charAt(0).toUpperCase() + raw.slice(1)) as HeaterMode;
+      for (const h of heaters) {
+        console.log(`[${h.name}] setting mode → ${mode}…`);
+        await h.setMode(mode);
+        await sleep(READBACK_DELAY_MS);
+        printState(h.name, await h.getState());
+      }
+      break;
+    }
+
+    case 'lock':
+    case 'unlock': {
+      const locked = command === 'lock';
+      for (const h of heaters) {
+        console.log(`[${h.name}] ${locked ? 'locking' : 'unlocking'}…`);
+        await h.setChildLock(locked);
+        await sleep(READBACK_DELAY_MS);
+        printState(h.name, await h.getState());
       }
       break;
     }
@@ -86,22 +167,12 @@ async function main(): Promise<void> {
       break;
     }
 
-    default: {
-      console.error(`
-ECOSO Torr local control — commands:
-  state       Read current state from both heaters
-  on / off    Power both heaters on or off
-  temp <°C>   Set target temperature on both heaters
-  discover    Dump raw DP map (schema discovery)
-
-Run one heater at a time by editing the devices array in index.ts.
-`);
-      process.exit(1);
-    }
+    default:
+      usage();
   }
 }
 
 main().catch((err: unknown) => {
-  console.error('Error:', err);
+  console.error('Error:', err instanceof Error ? err.message : err);
   process.exit(1);
 });

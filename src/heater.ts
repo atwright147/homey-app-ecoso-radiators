@@ -13,7 +13,6 @@
 
 import TuyAPI from 'tuyapi';
 import type { TuyaDeviceOptions } from 'tuyapi';
-import { EventEmitter } from 'events';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -52,67 +51,76 @@ const DP = {
 
 export class EcosoHeater {
   public readonly name: string;
-  private device: TuyAPI;
-  private emitter: EventEmitter;
+  private readonly opts: TuyaDeviceOptions;
 
   constructor(config: HeaterConfig) {
     this.name = config.name;
 
-    const opts: TuyaDeviceOptions = {
+    this.opts = {
       id: config.id,
       key: config.key,
       ip: config.ip,
       version: (config.version ?? '3.4') as TuyaDeviceOptions['version'],
-      issueGetOnConnect: true,
+      issueGetOnConnect: false,
     };
-
-    this.device = new TuyAPI(opts);
-    this.emitter = this.device as unknown as EventEmitter;
-
-    // Forward unhandled errors so callers can attach .on('error')
-    this.device.on('error', () => { /* swallow — caller listens */ });
   }
 
   // ── Connection helpers ─────────────────────────────────────────────────────
 
-  /** Connect, run `fn`, then disconnect. Returns whatever `fn` resolves to. */
+  /**
+   * Create a fresh TuyAPI instance per call — reusing a disconnected instance
+   * across calls causes reconnect failures on v3.4 devices.
+   */
+  private makeDevice(): TuyAPI {
+    return new TuyAPI(this.opts);
+  }
+
+  /**
+   * Connect, run `fn`, then disconnect. Returns whatever `fn` resolves to.
+   * For set operations: listener is NOT needed — set() returns a promise.
+   */
   async withConnection<T>(fn: (device: TuyAPI) => Promise<T>): Promise<T> {
-    await this.device.find();
-    await this.device.connect();
+    const device = this.makeDevice();
+    const onError = (_err: Error) => {};
+    (device as unknown as import('events').EventEmitter).on('error', onError);
+    await device.find();
+    await device.connect();
     try {
-      return await fn(this.device);
+      return await fn(device);
     } finally {
-      await this.device.disconnect();
+      (device as unknown as import('events').EventEmitter).off('error', onError);
+      await device.disconnect();
     }
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
-  /** Read current heater state in one connection. */
+  /**
+   * Read current heater state (standalone, no preceding set).
+   * get() can fire immediately — no STATUS echo in flight.
+   */
   async getState(): Promise<HeaterState> {
-    return this.withConnection(() =>
-      new Promise<HeaterState>((resolve, reject) => {
-        const tid = setTimeout(() => reject(new Error('Timeout waiting for device data')), 8_000);
+    return this.withConnection(async (device) => {
+      const result = await device.get({ schema: true }) as { dps: Record<string, unknown> };
+      return parseState(result?.dps ?? {});
+    });
+  }
 
-        this.emitter.once('data', (rawData: { dps: Record<string, unknown> }) => {
-          clearTimeout(tid);
-          const dps = rawData?.dps ?? {};
-          resolve(parseState(dps));
-        });
-
-        this.emitter.once('error', (err: Error) => {
-          clearTimeout(tid);
-          reject(err);
-        });
-      }),
-    );
+  /**
+   * Send a DP value (fire-and-forget on its own connection).
+   * The device does not reliably echo a usable response after set —
+   * tuyapi's internal _setResolver swallows the STATUS packet before
+   * the data event fires. Use getState() separately after a delay.
+   */
+  private async setDp(dp: number, value: string | number | boolean): Promise<void> {
+    await this.withConnection(async (device) => {
+      await device.set({ dps: dp, set: value, shouldWaitForResponse: false });
+    });
   }
 
   /** Turn heater on (true) or off (false). */
   async setPower(on: boolean): Promise<void> {
-    await this.withConnection(async (device) => {
-      await device.set({ dps: DP.SWITCH, set: on });
-    });
+    await this.setDp(DP.SWITCH, on);
   }
 
   /**
@@ -124,48 +132,25 @@ export class EcosoHeater {
     if (rounded < 5 || rounded > 35) {
       throw new RangeError(`Target temperature ${rounded} °C is outside the safe 5–35 °C range`);
     }
-    await this.withConnection(async (device) => {
-      await device.set({ dps: DP.TEMP_SET, set: rounded });
-    });
+    await this.setDp(DP.TEMP_SET, rounded);
   }
 
   /** Set mode ('Low' or 'High' power). */
   async setMode(mode: HeaterMode): Promise<void> {
-    await this.withConnection(async (device) => {
-      await device.set({ dps: DP.MODE, set: mode });
-    });
+    await this.setDp(DP.MODE, mode);
   }
 
   /** Set child lock. */
   async setChildLock(locked: boolean): Promise<void> {
-    await this.withConnection(async (device) => {
-      await device.set({ dps: DP.CHILDLOCK, set: locked });
-    });
+    await this.setDp(DP.CHILDLOCK, locked);
   }
 
-  /**
-   * Dump ALL raw DP values reported by the device — useful for schema discovery
-   * when the documented DPs don't match what your device actually sends.
-   */
+  /** Dump ALL raw DP values — useful for schema discovery. */
   async discoverDps(): Promise<Record<string, unknown>> {
-    return this.withConnection(() =>
-      new Promise<Record<string, unknown>>((resolve, reject) => {
-        const accumulated: Record<string, unknown> = {};
-        const tid = setTimeout(() => resolve(accumulated), 6_000);
-
-        const onData = (rawData: { dps: Record<string, unknown> }) => {
-          Object.assign(accumulated, rawData?.dps ?? {});
-        };
-
-        this.emitter.on('data', onData);
-
-        this.emitter.once('error', (err: Error) => {
-          clearTimeout(tid);
-          this.emitter.off('data', onData);
-          reject(err);
-        });
-      }),
-    );
+    return this.withConnection(async (device) => {
+      const result = await device.get({ schema: true }) as { dps: Record<string, unknown> };
+      return result?.dps ?? {};
+    });
   }
 }
 
