@@ -21,3 +21,7 @@ devices.json.bak
 # Editor
 .vscode/
 *.swp
+
+
+# Added by Homey CLI
+/.homeybuild/

@@ -20,7 +20,7 @@
  *   npx ts-node src/index.ts lock
  */
 
-import { EcosoHeater, HeaterConfig, HeaterMode } from './heater';
+import { EcosoHeater, HeaterConfig, HeaterMode } from '../lib/heater';
 import devicesJson from '../devices.json';
 
 // ── Parse --device flag ───────────────────────────────────────────────────────

@@ -1,0 +1,139 @@
+{
+  "id": "com.ecoso.rads",
+  "version": "1.0.0",
+  "compatibility": ">=5.0.0",
+  "sdk": 3,
+  "platforms": [
+    "local"
+  ],
+  "name": {
+    "en": "ECOSO Radiators"
+  },
+  "description": {
+    "en": "Control ECOSO electric panel heaters via Tuya local LAN"
+  },
+  "brandColor": "#E84D0E",
+  "category": [
+    "climate"
+  ],
+  "permissions": [],
+  "images": {
+    "small": "/assets/images/small.png",
+    "large": "/assets/images/large.png",
+    "xlarge": "/assets/images/xlarge.png"
+  },
+  "author": {
+    "name": "Andy"
+  },
+  "capabilities": {
+    "ecoso_mode": {
+      "type": "enum",
+      "title": {
+        "en": "Heating Mode"
+      },
+      "values": [
+        {
+          "id": "Low",
+          "title": {
+            "en": "Low"
+          }
+        },
+        {
+          "id": "High",
+          "title": {
+            "en": "High"
+          }
+        }
+      ],
+      "getable": true,
+      "setable": true,
+      "uiComponent": "picker"
+    }
+  },
+  "drivers": [
+    {
+      "id": "ecoso_torr",
+      "name": {
+        "en": "ECOSO Torr"
+      },
+      "class": "thermostat",
+      "capabilities": [
+        "onoff",
+        "target_temperature",
+        "measure_temperature",
+        "ecoso_mode"
+      ],
+      "capabilitiesOptions": {
+        "target_temperature": {
+          "min": 5,
+          "max": 35,
+          "step": 1
+        }
+      },
+      "energy": {
+        "approximation": {
+          "usageOff": 0,
+          "usageOn": 1500
+        }
+      },
+      "platforms": [
+        "local"
+      ],
+      "connectivity": [
+        "lan"
+      ],
+      "images": {
+        "small": "/drivers/ecoso_torr/assets/images/small.png",
+        "large": "/drivers/ecoso_torr/assets/images/large.png",
+        "xlarge": "/drivers/ecoso_torr/assets/images/xlarge.png"
+      },
+      "pair": [
+        {
+          "id": "list_devices",
+          "template": "list_devices",
+          "navigation": {
+            "next": "add_devices"
+          }
+        },
+        {
+          "id": "add_devices",
+          "template": "add_devices"
+        }
+      ],
+      "settings": [
+        {
+          "id": "tuya_id",
+          "type": "text",
+          "label": {
+            "en": "Device ID"
+          },
+          "value": ""
+        },
+        {
+          "id": "ip",
+          "type": "text",
+          "label": {
+            "en": "IP Address"
+          },
+          "value": ""
+        },
+        {
+          "id": "local_key",
+          "type": "password",
+          "label": {
+            "en": "Local Key"
+          },
+          "value": ""
+        },
+        {
+          "id": "version",
+          "type": "text",
+          "label": {
+            "en": "Protocol Version"
+          },
+          "value": "3.4"
+        }
+      ]
+    }
+  ]
+}

@@ -1,15 +1,17 @@
 {
-  "name": "ecoso-rads",
+  "name": "com.ecoso.rads",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Control ECOSO electric panel heaters via Tuya local LAN",
+  "main": "app.js",
   "scripts": {
-    "discover": "ts-node src/index.ts discover",
-    "state":    "ts-node src/index.ts state",
-    "on":       "ts-node src/index.ts on",
-    "off":      "ts-node src/index.ts off",
-    "build":    "tsc",
-    "scan":     ".venv/bin/python3 -m tinytuya scan",
+    "build": "tsc --project tsconfig.json",
+    "validate": "homey app validate",
+    "run:homey": "homey app run",
+    "cli:discover": "ts-node src/index.ts discover",
+    "cli:state": "ts-node src/index.ts state",
+    "cli:on": "ts-node src/index.ts on",
+    "cli:off": "ts-node src/index.ts off",
+    "scan": ".venv/bin/python3 -m tinytuya scan",
     "get-keys": ".venv/bin/python3 get-keys.py"
   },
   "keywords": [],
@@ -20,6 +22,7 @@
     "tuyapi": "^7.7.1"
   },
   "devDependencies": {
+    "@types/homey": "npm:homey-apps-sdk-v3-types@^0.3.12",
     "@types/node": "^25.5.0",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.2"

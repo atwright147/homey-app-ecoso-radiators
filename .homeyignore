@@ -1,0 +1,19 @@
+# CLI test harness (not part of the Homey app)
+src/
+
+# Python utilities
+.venv/
+get-keys.py
+mitm-keys.py
+*.py
+
+# Build artifacts
+dist/
+
+# Secrets & local config
+devices.json
+snapshot.json
+
+# Dev notes
+dp-schema.json
+README.md
