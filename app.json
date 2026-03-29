@@ -96,10 +96,20 @@
         "locked"
       ],
       "capabilitiesOptions": {
+        "onoff": {
+          "title": {
+            "en": "Power"
+          }
+        },
         "target_temperature": {
           "min": 5,
           "max": 35,
           "step": 1
+        },
+        "locked": {
+          "title": {
+            "en": "Lock State"
+          }
         }
       },
       "energy": {
