@@ -12,6 +12,11 @@ class EcosoTorrDevice extends Device {
   async onInit() {
     const settings = this.getSettings() as Record<string, string>;
 
+    // Migrate: add capabilities that may be missing on already-paired devices
+    if (!this.hasCapability('locked')) {
+      await this.addCapability('locked');
+    }
+
     // Always register capability listeners, even before configuration
     this.registerCapabilityListener('onoff', async (value: boolean) => {
       if (!this.heater) throw new Error('Device not configured');
@@ -28,6 +33,12 @@ class EcosoTorrDevice extends Device {
     this.registerCapabilityListener('ecoso_mode', async (value: string) => {
       if (!this.heater) throw new Error('Device not configured');
       await this.heater.setMode(value as 'Low' | 'High');
+      this.scheduleReadback();
+    });
+
+    this.registerCapabilityListener('locked', async (value: boolean) => {
+      if (!this.heater) throw new Error('Device not configured');
+      await this.heater.setChildLock(value);
       this.scheduleReadback();
     });
 
@@ -133,6 +144,9 @@ class EcosoTorrDevice extends Device {
     }
     if (state.mode !== null) {
       updates.push(this.setCapabilityValue('ecoso_mode', state.mode));
+    }
+    if (state.childLock !== null) {
+      updates.push(this.setCapabilityValue('locked', state.childLock));
     }
 
     await Promise.all(updates);

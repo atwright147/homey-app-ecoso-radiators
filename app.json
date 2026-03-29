@@ -61,7 +61,8 @@
         "onoff",
         "target_temperature",
         "measure_temperature",
-        "ecoso_mode"
+        "ecoso_mode",
+        "locked"
       ],
       "capabilitiesOptions": {
         "target_temperature": {
