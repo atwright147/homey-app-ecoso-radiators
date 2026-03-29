@@ -25,6 +25,37 @@
   "author": {
     "name": "Andy"
   },
+  "flow": {
+    "actions": [
+      {
+        "id": "set_mode",
+        "title": {
+          "en": "Set heating mode"
+        },
+        "titleFormatted": {
+          "en": "Set heating mode to [[mode]]"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=ecoso_torr"
+          },
+          {
+            "name": "mode",
+            "type": "dropdown",
+            "title": {
+              "en": "Mode"
+            },
+            "values": [
+              { "id": "Low", "label": { "en": "Low" } },
+              { "id": "High", "label": { "en": "High" } }
+            ]
+          }
+        ]
+      }
+    ]
+  },
   "capabilities": {
     "ecoso_mode": {
       "type": "enum",

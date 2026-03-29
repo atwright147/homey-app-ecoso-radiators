@@ -14,7 +14,9 @@ class EcosoTorrDevice extends Device {
 
     // Migrate: add capabilities that may be missing on already-paired devices
     if (!this.hasCapability('locked')) {
-      await this.addCapability('locked');
+      await this.addCapability('locked').catch((err: Error) =>
+        this.log('Could not add locked capability:', err.message),
+      );
     }
 
     // Always register capability listeners, even before configuration
@@ -52,10 +54,11 @@ class EcosoTorrDevice extends Device {
     this.heater = this.buildHeater(settings);
     this.startPolling();
 
-    // Initial state sync
-    await this.syncState().catch((err: Error) =>
-      this.log('Initial state sync failed (will retry on poll):', err.message),
-    );
+    // Initial state sync — show error on card if it fails so it's visible without logs
+    await this.syncState().catch(async (err: Error) => {
+      this.log('Initial state sync failed (will retry on poll):', err.message);
+      await this.setUnavailable(`Connection failed: ${err.message}`);
+    });
   }
 
   async onSettings({
