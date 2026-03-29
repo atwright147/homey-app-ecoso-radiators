@@ -9,9 +9,9 @@
     "validate": "homey app validate --level publish",
     "homey:install": "homey app install",
     "dev": "homey app run",
-    "cli": "ts-node src/index.ts",
-    "cli:state": "ts-node src/index.ts --device 1 state",
-    "cli:state2": "ts-node src/index.ts --device 2 state",
+    "cli": "tsx src/index.ts",
+    "cli:state": "tsx src/index.ts --device 1 state",
+    "cli:state2": "tsx src/index.ts --device 2 state",
     "scan": ".venv/bin/python3 -m tinytuya scan",
     "get-keys": ".venv/bin/python3 get-keys.py"
   },
@@ -25,7 +25,7 @@
   "devDependencies": {
     "@types/homey": "npm:homey-apps-sdk-v3-types@^0.3.12",
     "@types/node": "^25.5.0",
-    "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   }
 }
