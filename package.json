@@ -7,7 +7,7 @@
     "build": "tsc --project tsconfig.json",
     "typecheck": "tsc --noEmit",
     "validate": "homey app validate --level publish",
-    "install:homey": "homey app install",
+    "homey:install": "homey app install",
     "dev": "homey app run",
     "cli": "ts-node src/index.ts",
     "cli:state": "ts-node src/index.ts --device 1 state",

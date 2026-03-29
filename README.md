@@ -78,7 +78,7 @@ devices.json            Local credentials (gitignored)
 npm run typecheck          # TypeScript type-check with no output
 npm run build              # compile TypeScript → .homeybuild/
 npm run validate           # validate app manifest at publish level
-npm run install:homey      # build + install to Homey Pro (use this for testing)
+npm run homey:install      # build + install to Homey Pro (use this for testing)
 npm run dev                # homey app run (dev mode — LAN blocked, see note below)
 ```
 
@@ -119,7 +119,7 @@ Repeat for the second heater.
 
 `homey app run` runs in a Podman bridge container (`10.88.0.0/16`) that **blocks all outbound TCP to private LAN addresses** (192.168.x.x). Any connection attempt to a local device will get `ECONNREFUSED` immediately. External HTTPS still works.
 
-`homey app install` (production mode) has full LAN access. **Always use `npm run install:homey` when testing device communication.**
+`homey app install` (production mode) has full LAN access. **Always use `npm run homey:install` when testing device communication.**
 
 ### Tuya protocol v3.4
 
