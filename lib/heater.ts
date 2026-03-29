@@ -78,12 +78,16 @@ export class EcosoHeater {
   /**
    * Connect, run `fn`, then disconnect. Returns whatever `fn` resolves to.
    * For set operations: listener is NOT needed — set() returns a promise.
+   * Skips find() when IP is already provided — find() uses UDP broadcasts
+   * which don't work in container environments (e.g. Homey Docker).
    */
   async withConnection<T>(fn: (device: TuyAPI) => Promise<T>): Promise<T> {
     const device = this.makeDevice();
     const onError = (_err: Error) => {};
     (device as unknown as import('events').EventEmitter).on('error', onError);
-    await device.find();
+    if (!this.opts.ip) {
+      await device.find();
+    }
     await device.connect();
     try {
       return await fn(device);

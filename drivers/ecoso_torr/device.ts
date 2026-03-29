@@ -12,6 +12,25 @@ class EcosoTorrDevice extends Device {
   async onInit() {
     const settings = this.getSettings() as Record<string, string>;
 
+    // Always register capability listeners, even before configuration
+    this.registerCapabilityListener('onoff', async (value: boolean) => {
+      if (!this.heater) throw new Error('Device not configured');
+      await this.heater.setPower(value);
+      this.scheduleReadback();
+    });
+
+    this.registerCapabilityListener('target_temperature', async (value: number) => {
+      if (!this.heater) throw new Error('Device not configured');
+      await this.heater.setTargetTemp(value);
+      this.scheduleReadback();
+    });
+
+    this.registerCapabilityListener('ecoso_mode', async (value: string) => {
+      if (!this.heater) throw new Error('Device not configured');
+      await this.heater.setMode(value as 'Low' | 'High');
+      this.scheduleReadback();
+    });
+
     if (!settings.ip || !settings.local_key || !settings.tuya_id) {
       await this.setUnavailable(
         'Device not configured. Go to device settings and enter the IP Address, Device ID and Local Key.',
@@ -20,22 +39,6 @@ class EcosoTorrDevice extends Device {
     }
 
     this.heater = this.buildHeater(settings);
-
-    this.registerCapabilityListener('onoff', async (value: boolean) => {
-      await this.heater.setPower(value);
-      this.scheduleReadback();
-    });
-
-    this.registerCapabilityListener('target_temperature', async (value: number) => {
-      await this.heater.setTargetTemp(value);
-      this.scheduleReadback();
-    });
-
-    this.registerCapabilityListener('ecoso_mode', async (value: string) => {
-      await this.heater.setMode(value as 'Low' | 'High');
-      this.scheduleReadback();
-    });
-
     this.startPolling();
 
     // Initial state sync
@@ -54,11 +57,19 @@ class EcosoTorrDevice extends Device {
   }): Promise<void> {
     if (changedKeys.some((k) => ['ip', 'local_key', 'version', 'tuya_id'].includes(k))) {
       const s = newSettings as Record<string, string>;
+      this.log(`Settings changed: ${changedKeys.join(', ')}. IP=${s.ip}, ID=${s.tuya_id}`);
       this.heater = this.buildHeater(s);
 
       if (s.ip && s.local_key && s.tuya_id) {
-        await this.setAvailable();
-        await this.syncState();
+        try {
+          await this.syncState();
+          await this.setAvailable();
+          this.startPolling();
+          this.log('Device configured and online');
+        } catch (err) {
+          this.log('Failed to connect after settings change:', (err as Error).message);
+          await this.setUnavailable(`Connection failed: ${(err as Error).message}`);
+        }
       }
     }
   }
