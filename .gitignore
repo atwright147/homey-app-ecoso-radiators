@@ -10,6 +10,9 @@ dist/
 # Secrets — contains device local_keys, never commit
 devices.json
 
+# Tuya cloud credentials
+.env
+
 # tinytuya scan output (may contain device IDs)
 snapshot.json
 tinytuya.json

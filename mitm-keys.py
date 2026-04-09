@@ -32,11 +32,47 @@ Security note
 
 import json
 import re
+import os
 from pathlib import Path
 from mitmproxy import http
 
 DEVICES_FILE = Path(__file__).parent / "devices.json"
-TARGET_IDS   = {"<tuya-device-id-1>", "<tuya-device-id-2>"}
+
+
+def load_target_ids() -> set[str]:
+    """Load target device IDs from env or local devices.json.
+
+    Env override: TARGET_IDS="id1,id2,..."
+    """
+    env_ids = os.getenv("TARGET_IDS", "").strip()
+    if env_ids:
+        return {item.strip() for item in env_ids.split(",") if item.strip()}
+
+    if DEVICES_FILE.exists():
+        try:
+            data = json.loads(DEVICES_FILE.read_text())
+            return {
+                dev.get("id", "")
+                for dev in data.get("devices", [])
+                if isinstance(dev, dict) and dev.get("id")
+            }
+        except Exception:
+            return set()
+
+    return set()
+
+
+TARGET_IDS = load_target_ids()
+if not TARGET_IDS:
+    raise RuntimeError(
+        "No target IDs configured. Add device IDs to local devices.json "
+        "or set TARGET_IDS=id1,id2 before running mitmdump."
+    )
+if not DEVICES_FILE.exists():
+    raise RuntimeError(
+        "devices.json not found. Create a local ignored devices.json first "
+        "so extracted keys can be patched safely."
+    )
 
 # Regex patterns for common Tuya API response fields
 _KEY_RE    = re.compile(r'"local_key"\s*:\s*"([^"]{16})"')
@@ -67,7 +103,7 @@ def response(flow: http.HTTPFlow) -> None:
                 dev_id  = d.get("id") or d.get("devId", "")
                 dev_key = d.get("local_key", "")
                 if dev_id and dev_key:
-                    target = "  ← ECOSO DEVICE" if dev_id in TARGET_IDS else ""
+                    target = "  ← target device" if dev_id in TARGET_IDS else ""
                     print(f"  id={dev_id}  key={dev_key}{target}")
                     if dev_id in TARGET_IDS:
                         _patch_devices_json(dev_id, dev_key)
