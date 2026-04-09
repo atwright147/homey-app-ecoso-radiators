@@ -7,6 +7,9 @@ dist/
 # Python virtualenv
 .venv/
 
+# Python cache
+__pycache__/
+
 # Secrets — contains device local_keys, never commit
 devices.json
 
