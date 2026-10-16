@@ -2,12 +2,16 @@ import { Device } from 'homey';
 import { EcosoHeater } from '../../lib/heater';
 import type { HeaterState } from '../../lib/heater';
 
-const POLL_INTERVAL_MS = 30_000;
-const READBACK_DELAY_MS = 1_200;
+// State is pushed by the heater on change, so polling is only a safety net.
+// Keep it slow: each operation now runs on the shared long-lived session, and
+// the device dislikes connection churn (see lib/heater.ts).
+const POLL_INTERVAL_MS = 120_000;
+const READBACK_DELAY_MS = 2_000;
 
 class EcosoTorrDevice extends Device {
-  private heater!: EcosoHeater;
+  private heater?: EcosoHeater;
   private pollTimer?: NodeJS.Timeout;
+  private readbackTimer?: NodeJS.Timeout;
 
   async onInit() {
     const settings = this.getSettings() as Record<string, string>;
@@ -51,7 +55,7 @@ class EcosoTorrDevice extends Device {
       return;
     }
 
-    this.heater = this.buildHeater(settings);
+    this.useHeater(this.buildHeater(settings));
     this.startPolling();
 
     // Initial state sync — show error on card if it fails so it's visible without logs
@@ -72,7 +76,8 @@ class EcosoTorrDevice extends Device {
     if (changedKeys.some((k) => ['ip', 'local_key', 'version', 'tuya_id'].includes(k))) {
       const s = newSettings as Record<string, string>;
       this.log(`Settings changed: ${changedKeys.join(', ')}. IP=${s.ip}, ID=${s.tuya_id}`);
-      this.heater = this.buildHeater(s);
+      this.stopPolling();
+      this.useHeater(this.buildHeater(s));
 
       if (s.ip && s.local_key && s.tuya_id) {
         try {
@@ -90,6 +95,8 @@ class EcosoTorrDevice extends Device {
 
   async onDeleted() {
     this.stopPolling();
+    this.clearReadback();
+    this.disposeHeater();
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────
@@ -102,6 +109,35 @@ class EcosoTorrDevice extends Device {
       key: settings['local_key'],
       version: settings['version'] || '3.4',
     });
+  }
+
+  /** Adopt a heater instance, wiring its pushed-state and availability events. */
+  private useHeater(heater: EcosoHeater): void {
+    this.disposeHeater();
+    this.heater = heater;
+
+    heater.on('state', (state: HeaterState) => {
+      this.applyState(state).catch((err: Error) =>
+        this.log('Failed to apply pushed state:', err.message),
+      );
+      this.setAvailable().catch(() => { /* ignore */ });
+    });
+
+    heater.on('connected', () => {
+      this.setAvailable().catch(() => { /* ignore */ });
+    });
+
+    heater.on('unavailable', (retryInMs: number) => {
+      this.log(`Heater not responding; retrying in ${Math.round(retryInMs / 1000)}s`);
+      this.setUnavailable('Heater not responding').catch(() => { /* ignore */ });
+    });
+  }
+
+  private disposeHeater(): void {
+    if (!this.heater) return;
+    this.heater.removeAllListeners();
+    this.heater.close();
+    this.heater = undefined;
   }
 
   private startPolling() {
@@ -119,15 +155,30 @@ class EcosoTorrDevice extends Device {
     }
   }
 
-  /** Deferred re-read after a fire-and-forget set command clears the wire. */
+  /**
+   * Deferred re-read after a fire-and-forget set. Runs on the shared session,
+   * so it does not open another connection.
+   */
   private scheduleReadback() {
-    this.homey.setTimeout(
-      () => this.syncState().catch(() => { /* silent — next poll will recover */ }),
+    this.clearReadback();
+    this.readbackTimer = this.homey.setTimeout(
+      () => {
+        this.readbackTimer = undefined;
+        this.syncState().catch(() => { /* silent — next poll will recover */ });
+      },
       READBACK_DELAY_MS,
     );
   }
 
+  private clearReadback() {
+    if (this.readbackTimer !== undefined) {
+      this.homey.clearTimeout(this.readbackTimer);
+      this.readbackTimer = undefined;
+    }
+  }
+
   private async syncState() {
+    if (!this.heater) return;
     const state = await this.heater.getState();
     await this.applyState(state);
     await this.setAvailable();

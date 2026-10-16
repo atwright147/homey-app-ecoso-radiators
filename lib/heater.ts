@@ -9,10 +9,29 @@
  *   5  → Timer         (integer)  countdown timer in minutes
  *   6  → FAULT         (bitmap)   fault flags (read-only)
  *   7  → Mode          (enum)     "Low" | "High"
+ *
+ * ── Connection model ─────────────────────────────────────────────────────────
+ * Tuya protocol 3.4 devices only tolerate a limited amount of local session
+ * churn. Opening a fresh TCP connection (which for 3.4 means a full key
+ * negotiation) for every single read/write, or retrying failed commands
+ * aggressively, eventually makes the device start rejecting *all* local
+ * connections — it resets the session during the key handshake, so every client
+ * then sees "check device key or version" (Tuya error 914) despite a correct
+ * key, until the heater is physically power-cycled. This is a known, device-class
+ * wide issue: see make-all/tuya-local issue #5347.
+ *
+ * To stay well inside the device's tolerance this class:
+ *   - keeps ONE long-lived Tuya session per heater and reuses it for every read
+ *     and write (no connect/disconnect per call);
+ *   - never runs more than one connection attempt at a time;
+ *   - waits out an exponential backoff after a failure instead of hammering;
+ *   - surfaces state changes the device pushes (STATUS / DP_REFRESH packets)
+ *     rather than polling aggressively.
  */
 
+import { EventEmitter } from 'events';
 import TuyAPI from 'tuyapi';
-import type { TuyaDeviceOptions } from 'tuyapi';
+import type { DPSObject, TuyaDeviceOptions } from 'tuyapi';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,13 +66,40 @@ const DP = {
   MODE: 7,
 } as const;
 
+// ── Connection tuning ────────────────────────────────────────────────────────
+// Deliberately gentle — see the connection model above.
+const CONNECT_TIMEOUT_MS = 10_000;   // TCP connect + v3.4 key negotiation
+const OPERATION_TIMEOUT_MS = 8_000;  // a single read/write
+const BASE_BACKOFF_MS = 15_000;      // start backing off after the first failure
+const MAX_BACKOFF_MS = 5 * 60_000;   // cap retry interval at 5 minutes
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms} ms`)),
+      ms,
+    );
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err: Error) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
 // ── EcosoHeater class ────────────────────────────────────────────────────────
 
-export class EcosoHeater {
+export class EcosoHeater extends EventEmitter {
   public readonly name: string;
   private readonly opts: TuyaDeviceOptions;
 
+  private device: TuyAPI | null = null;
+  private connectInFlight: Promise<TuyAPI> | null = null;
+  private failureCount = 0;
+  private nextAttemptAt = 0;
+  private closed = false;
+
   constructor(config: HeaterConfig) {
+    super();
     this.name = config.name;
 
     this.opts = {
@@ -65,60 +111,43 @@ export class EcosoHeater {
     };
   }
 
-  // ── Connection helpers ─────────────────────────────────────────────────────
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
 
-  /**
-   * Create a fresh TuyAPI instance per call — reusing a disconnected instance
-   * across calls causes reconnect failures on v3.4 devices.
-   */
-  private makeDevice(): TuyAPI {
-    return new TuyAPI(this.opts);
+  /** True while a live session is established. */
+  isConnected(): boolean {
+    return this.device?.isConnected() ?? false;
   }
 
   /**
-   * Connect, run `fn`, then disconnect. Returns whatever `fn` resolves to.
-   * For set operations: listener is NOT needed — set() returns a promise.
-   * Skips find() when IP is already provided — find() uses UDP broadcasts
-   * which don't work in container environments (e.g. Homey Docker).
+   * Close the session and stop all further activity. Safe to call more than once.
+   * Always call this when discarding the instance so the socket and the internal
+   * heartbeat timer are released.
    */
-  async withConnection<T>(fn: (device: TuyAPI) => Promise<T>): Promise<T> {
-    const device = this.makeDevice();
-    const onError = (_err: Error) => {};
-    (device as unknown as import('events').EventEmitter).on('error', onError);
-    if (!this.opts.ip) {
-      await device.find();
-    }
-    await device.connect();
-    try {
-      return await fn(device);
-    } finally {
-      (device as unknown as import('events').EventEmitter).off('error', onError);
-      await device.disconnect();
-    }
+  close(): void {
+    this.closed = true;
+    this.removeAllListeners();
+    this.dropDevice();
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
   /**
-   * Read current heater state (standalone, no preceding set).
-   * get() can fire immediately — no STATUS echo in flight.
+   * Read current heater state. Reuses the existing session (connecting once if
+   * needed). Emits `state` when the device pushes an update; callers that need a
+   * fresh value use the returned object.
    */
   async getState(): Promise<HeaterState> {
-    return this.withConnection(async (device) => {
-      const result = await device.get({ schema: true }) as { dps: Record<string, unknown> };
+    return this.run(async (device) => {
+      const result = await device.get({ schema: true }) as { dps?: Record<string, unknown> };
       return parseState(result?.dps ?? {});
     });
   }
 
-  /**
-   * Send a DP value (fire-and-forget on its own connection).
-   * The device does not reliably echo a usable response after set —
-   * tuyapi's internal _setResolver swallows the STATUS packet before
-   * the data event fires. Use getState() separately after a delay.
-   */
-  private async setDp(dp: number, value: string | number | boolean): Promise<void> {
-    await this.withConnection(async (device) => {
-      await device.set({ dps: dp, set: value, shouldWaitForResponse: false });
+  /** Dump ALL raw DP values — useful for schema discovery. */
+  async discoverDps(): Promise<Record<string, unknown>> {
+    return this.run(async (device) => {
+      const result = await device.get({ schema: true }) as { dps?: Record<string, unknown> };
+      return result?.dps ?? {};
     });
   }
 
@@ -149,12 +178,138 @@ export class EcosoHeater {
     await this.setDp(DP.CHILDLOCK, locked);
   }
 
-  /** Dump ALL raw DP values — useful for schema discovery. */
-  async discoverDps(): Promise<Record<string, unknown>> {
-    return this.withConnection(async (device) => {
-      const result = await device.get({ schema: true }) as { dps: Record<string, unknown> };
-      return result?.dps ?? {};
+  // ── Internals ──────────────────────────────────────────────────────────────
+
+  /**
+   * Send a DP value on the shared session, fire-and-forget.
+   * The device does not reliably echo a usable response after `set`, so the new
+   * state is picked up from the STATUS packet it pushes (handled in
+   * `handleData`) or by a subsequent `getState()`.
+   */
+  private async setDp(dp: number, value: string | number | boolean): Promise<void> {
+    await this.run(async (device) => {
+      await device.set({ dps: dp, set: value, shouldWaitForResponse: false });
     });
+  }
+
+  /**
+   * Ensure a live session, run `fn` against it with a timeout, and keep the
+   * session for next time. On any failure, escalate the backoff and drop the
+   * socket so the next attempt starts a clean negotiation.
+   */
+  private async run<T>(fn: (device: TuyAPI) => Promise<T>): Promise<T> {
+    const device = await this.connect();
+    try {
+      const result = await withTimeout(
+        fn(device),
+        OPERATION_TIMEOUT_MS,
+        `[${this.name}] device operation`,
+      );
+      this.noteSuccess();
+      return result;
+    } catch (err) {
+      this.noteFailure();
+      this.dropDevice();
+      throw err;
+    }
+  }
+
+  /**
+   * Establish (or reuse) a single session, honouring backoff. Never opens more
+   * than one socket at a time, even under concurrent callers.
+   */
+  private async connect(): Promise<TuyAPI> {
+    if (this.closed) throw new Error(`[${this.name}] heater is closed`);
+    if (this.device?.isConnected()) return this.device;
+    if (this.connectInFlight) return this.connectInFlight;
+
+    // A retained-but-dead socket is useless; drop it before reconnecting.
+    if (this.device) this.dropDevice();
+
+    const waitMs = this.nextAttemptAt - Date.now();
+    if (waitMs > 0) {
+      throw new Error(`[${this.name}] backing off for another ${Math.ceil(waitMs / 1000)}s`);
+    }
+
+    this.connectInFlight = this.openSession();
+    try {
+      return await this.connectInFlight;
+    } finally {
+      this.connectInFlight = null;
+    }
+  }
+
+  private async openSession(): Promise<TuyAPI> {
+    const device = new TuyAPI(this.opts);
+
+    device.on('data', (payload: DPSObject) => this.handleData(payload));
+    device.on('dp-refresh', (payload: DPSObject) => this.handleData(payload));
+    // Must always have an 'error' listener: the socket emits 'error' on a reset.
+    // The failure is surfaced through the rejected operation instead.
+    device.on('error', () => { /* handled via failed operations */ });
+    device.on('disconnected', () => this.handleDisconnect(device));
+
+    try {
+      await withTimeout(device.connect(), CONNECT_TIMEOUT_MS, `[${this.name}] connect`);
+    } catch (err) {
+      try {
+        device.removeAllListeners();
+        device.disconnect();
+      } catch { /* ignore */ }
+      this.noteFailure();
+      throw err;
+    }
+
+    // If close() was called while we were negotiating, discard the new socket
+    // rather than leaking a live connection and its heartbeat timer.
+    if (this.closed) {
+      try {
+        device.removeAllListeners();
+        device.disconnect();
+      } catch { /* ignore */ }
+      throw new Error(`[${this.name}] heater is closed`);
+    }
+
+    this.device = device;
+    this.noteSuccess();
+    this.emit('connected');
+    return device;
+  }
+
+  /** Forward state the device pushed (full STATUS or partial DP_REFRESH). */
+  private handleData(payload: DPSObject): void {
+    const dps = (payload as { dps?: Record<string, unknown> } | null)?.dps;
+    if (!dps) return;
+    this.emit('state', parseState(dps));
+  }
+
+  private handleDisconnect(device: TuyAPI): void {
+    if (this.device !== device) return;
+    this.dropDevice();
+    if (this.closed) return;
+    // The next operation (or poll) will reconnect subject to the backoff.
+    this.noteFailure();
+  }
+
+  /** Tear down the current socket and release its listeners. */
+  private dropDevice(): void {
+    const device = this.device;
+    this.device = null;
+    if (!device) return;
+    try { device.removeAllListeners(); } catch { /* ignore */ }
+    try { device.disconnect(); } catch { /* ignore */ }
+  }
+
+  private noteSuccess(): void {
+    this.failureCount = 0;
+    this.nextAttemptAt = 0;
+  }
+
+  private noteFailure(): void {
+    this.failureCount = Math.min(this.failureCount + 1, 12);
+    const delay = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** (this.failureCount - 1));
+    this.nextAttemptAt = Date.now() + delay;
+    this.emit('unavailable', delay);
   }
 }
 

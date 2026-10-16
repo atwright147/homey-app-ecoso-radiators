@@ -172,7 +172,18 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: unknown) => {
-  console.error('Error:', err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+function shutdown(code: number): void {
+  // Sessions are long-lived now, so close them or the process will never exit.
+  for (const h of allHeaters) {
+    try { h.close(); } catch { /* ignore */ }
+  }
+  process.exit(code);
+}
+
+main().then(
+  () => shutdown(0),
+  (err: unknown) => {
+    console.error('Error:', err instanceof Error ? err.message : err);
+    shutdown(1);
+  },
+);
