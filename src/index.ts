@@ -14,14 +14,15 @@
  *   unlock                     Disable child lock
  *
  * Examples:
- *   npx ts-node src/index.ts state
- *   npx ts-node src/index.ts --device 1 temp 20
- *   npx ts-node src/index.ts --device 2 mode high
- *   npx ts-node src/index.ts lock
+ *   npm run cli -- state
+ *   npm run cli -- --device 1 temp 20
+ *   npm run cli -- --device 2 mode high
+ *   npm run cli -- lock
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { EcosoHeater, HeaterConfig, HeaterMode } from '../lib/heater';
-import devicesJson from '../devices.json';
 
 // ── Parse --device flag ───────────────────────────────────────────────────────
 
@@ -41,7 +42,32 @@ const [command, ...args] = filteredArgv;
 
 // ── Build heater instances ────────────────────────────────────────────────────
 
-const allHeaters: EcosoHeater[] = (devicesJson.devices as HeaterConfig[]).map(
+/**
+ * Load device credentials at *runtime*.
+ *
+ * Deliberately NOT `import devicesJson from '../devices.json'`: importing a JSON
+ * module makes `tsc` emit a copy of it into the Homey build directory
+ * (`outDir: .homeybuild`), which is then packed into the app archive — leaking
+ * the device local keys. Reading it from disk keeps it out of the bundle.
+ * See AGENTS.md → "Never ship a secret".
+ */
+function loadDeviceConfigs(): HeaterConfig[] {
+  const file = path.join(__dirname, '..', 'devices.json');
+
+  let raw: string;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch {
+    throw new Error(
+      `Cannot read ${file} — create it with your Tuya device credentials (see README.md → Device credentials)`,
+    );
+  }
+
+  const parsed = JSON.parse(raw) as { devices?: HeaterConfig[] };
+  return parsed.devices ?? [];
+}
+
+const allHeaters: EcosoHeater[] = loadDeviceConfigs().map(
   (cfg) => new EcosoHeater(cfg),
 );
 
@@ -73,7 +99,7 @@ function usage(): never {
   console.error(`
 ECOSO Torr — test harness
 
-  npx ts-node src/index.ts [--device 1|2] <command> [args]
+  npm run cli -- [--device 1|2] <command> [args]
 
 Commands:
   discover           Dump raw DP values

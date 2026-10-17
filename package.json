@@ -5,7 +5,7 @@
   "main": "app.js",
   "scripts": {
     "build": "tsc --project tsconfig.json",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.cli.json",
     "validate": "homey app validate --level publish",
     "homey:install": "homey app install",
     "dev": "homey app run",

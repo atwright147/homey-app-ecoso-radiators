@@ -1,18 +1,37 @@
-# CLI test harness (not part of the Homey app)
+# Files listed here are excluded from the packed Homey app (`.homeybuild/`).
+# NOTE: this file only filters the *source* copy. Anything the TypeScript
+# compiler emits into `.homeybuild/` (outDir) is packed regardless — see
+# AGENTS.md → "Never ship a secret".
+
+# ── CLI test harness (dev only) ──────────────────────────────────────────────
 src/
 
-# Python utilities
-.venv/
-get-keys.py
-mitm-keys.py
-*.py
+# ── Dev tooling ──────────────────────────────────────────────────────────────
+# The tuyapi patch is applied to node_modules by `postinstall` at install time,
+# so the patch file itself does not need to travel inside the app bundle.
+patches/
+tsconfig.json
+tsconfig.*.json
 
-# Build artifacts
+# ── Python utilities ─────────────────────────────────────────────────────────
+.venv/
+__pycache__/
+*.py
+*.pyc
+
+# ── Build artifacts ──────────────────────────────────────────────────────────
 dist/
 
-# Secrets & local config
+# ── Secrets & local config — NEVER ship ──────────────────────────────────────
 devices.json
+.env
 snapshot.json
+tinytuya.json
 
-# Dev notes
+# ── Docs & private notes (developer-facing only) ─────────────────────────────
+# Covers README.md, AGENTS.md, HANDOVER.md and — importantly — the private
+# OPENCODE-LOCAL.md. Nothing in these is needed at runtime.
+*.md
+
+# ── Dev notes ────────────────────────────────────────────────────────────────
 dp-schema.json

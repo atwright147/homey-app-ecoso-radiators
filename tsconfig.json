@@ -14,8 +14,7 @@
   "include": [
     "app.ts",
     "lib/**/*.ts",
-    "drivers/**/*.ts",
-    "src/**/*.ts"
+    "drivers/**/*.ts"
   ],
   "exclude": [
     "node_modules",
