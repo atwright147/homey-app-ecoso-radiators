@@ -213,6 +213,11 @@ released, upgrade `tuyapi`, delete `patches/tuyapi+7.7.1.patch`, and remove the
 Do not copy their contents, or raw chat transcripts, into commits, issues, PRs,
 prompts, or docs. The Python scripts can print credentials — redact output before sharing.
 
+**These files are backed up in the user's password manager.** If `devices.json` or
+`.env` are missing (fresh clone, new machine), ask the user to restore them from
+there — do not fetch, guess or regenerate keys, and never ask for the values to be
+pasted into a chat. The committed `.env.example` documents the variable names only.
+
 ### The trap (this actually happened)
 
 `tsconfig.json` sets `"outDir": ".homeybuild"`. The Homey CLI packs the app by

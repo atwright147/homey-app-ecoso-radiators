@@ -44,6 +44,17 @@ Credentials live in `devices.json` (gitignored — **never commit it**). Format:
 }
 ```
 
+Cloud credentials used to retrieve those keys live in `.env` (gitignored). Copy
+the committed template and fill it in:
+
+```sh
+cp .env.example .env
+```
+
+> 🔐 **The secrets are not stored in git.** `devices.json` and `.env` are backed up
+> in the project owner's password manager. If either file is missing, restore it
+> from there — do not try to re-derive the keys.
+
 To obtain the `local_key` values, use tinytuya:
 
 ```sh

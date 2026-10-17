@@ -24,7 +24,7 @@ dist/
 
 # ── Secrets & local config — NEVER ship ──────────────────────────────────────
 devices.json
-.env
+.env*
 snapshot.json
 tinytuya.json
 
