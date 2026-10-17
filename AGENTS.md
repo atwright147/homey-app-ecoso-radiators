@@ -286,6 +286,22 @@ For app-level verification, use `homey app run --remote` and watch for
 **Do not** use temperature writes as throwaway tests on the real heaters; use a
 no-op write (e.g. setting the current value) when exercising the write path.
 
+### Python utilities
+
+`.venv/` holds the local Python environment — in fish, activate it with
+`source .venv/bin/activate.fish`. These scripts are dev-only and never bundled:
+
+| Script | Purpose |
+|---|---|
+| `get-keys.py` | fetch each device's local key from the Tuya cloud API and write it into `devices.json` |
+| `debug-cloud.py` | inspect cloud-side device details |
+| `test-connect.py` | probe the heaters across protocol versions using `devices.json` |
+| `mitm-keys.py` | helper used when recovering keys from the phone app via mitmproxy |
+
+They can print credentials or device identifiers — redact output before sharing.
+`get-keys.py` and `debug-cloud.py` read `.env` (see `.env.example`); `get-keys.py`
+output is sensitive because it writes real keys into `devices.json`.
+
 ---
 
 ## 9. Homey device configuration and the MCP
@@ -328,12 +344,41 @@ its settings. Add it once per heater.
 
 ---
 
-## 12. Open items
+## 12. Background, decisions and history
 
-1. `HANDOVER.md` is **superseded** by this file and `README.md`; delete it once the
-   remaining provenance notes (§10) are no longer needed. It is excluded from the bundle.
-2. Upstream `tuyapi` **PR #709** is open — if merged, drop the local patch (§6).
-3. The upstream fork's linter (`xo` 0.25.4) crashes on Node 24 (`util.isDate`). Lint
+Durable context from the original build sessions. The full narrative lived in
+`HANDOVER.md`, which has been removed — this is the part worth keeping.
+
+**Decisions already made (do not relitigate without cause):**
+
+- **Manual credential entry beats LAN-discovery pairing.** Interactive pairing via
+  the scanner/browser was tried and proved unreliable (pairing flow and container
+  networking), so pairing deliberately creates one placeholder device and the real
+  ID / IP / key / version are typed into device settings. See §9.
+- **`tsx` runs the CLI** (`npm run cli --`); there is no build step for it.
+- **Timer and weekly scheduling are intentionally not exposed.** DPs 5 (Timer) and
+  6 (FAULT) are read but not surfaced as capabilities.
+- **Homey capability labels** are "Power" and "Lock State".
+
+**Notable episodes:**
+
+| Date | What happened |
+|---|---|
+| 2026-03-27 | Started: two ECOSO Torr heaters, LAN-only goal. Mapped the data points; chose a local-platform Homey app with a placeholder device and manual credential entry. |
+| 2026-04-04 | First "reachable but unavailable" investigation: Tuya error **914** with an unchanged key, no root cause found at the time. Later understood as the session-churn wedge (§5). |
+| 2026-04-09 | History rewrite to strip device identifiers and LAN addresses from the public repo; concluded no per-device local keys were in tracked history. See the caveats in §10. |
+| 2026-04-15 | MAC lookup (`find-rads-mac.py`, not in this checkout) led to static DHCP reservations; a power-cycle was needed for the new lease to take effect. |
+| 2026-10-17 | Root-caused the wedge: the per-operation connection model was the cause. Rewrote `lib/heater.ts` around one long-lived session, patched the `tuyapi` sequence bug, and reconciled the docs into this file and `README.md`. |
+
+Connectivity was left unverified in the 2026-04-04 session; that is long since
+resolved — both heaters run on the persistent-session client.
+
+---
+
+## 13. Open items
+
+1. Upstream `tuyapi` **PR #709** is open — if merged, drop the local patch (§6).
+2. The upstream fork's linter (`xo` 0.25.4) crashes on Node 24 (`util.isDate`). Lint
    the *other* repo later; it does not affect this one.
-4. No automated hardware tests — the CLI + `homey app run --remote` is the loop.
-5. `README.md`'s "fault/timer DPs are not exposed" still holds; add them only if needed.
+3. No automated hardware tests — the CLI + `homey app run --remote` is the loop.
+4. `README.md`'s "fault/timer DPs are not exposed" still holds; add them only if needed.

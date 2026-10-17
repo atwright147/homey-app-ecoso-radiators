@@ -29,7 +29,7 @@ snapshot.json
 tinytuya.json
 
 # ── Docs & private notes (developer-facing only) ─────────────────────────────
-# Covers README.md, AGENTS.md, HANDOVER.md and — importantly — the private
+# Covers README.md, AGENTS.md and — importantly — the private
 # OPENCODE-LOCAL.md. Nothing in these is needed at runtime.
 *.md
 
