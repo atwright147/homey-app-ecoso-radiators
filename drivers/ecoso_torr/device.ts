@@ -124,6 +124,7 @@ class EcosoTorrDevice extends Device {
     });
 
     heater.on('connected', () => {
+      this.log('Heater session established');
       this.setAvailable().catch(() => { /* ignore */ });
     });
 
