@@ -2,6 +2,8 @@
 
 Homey Pro app for controlling **ECOSO Torr** hardwired electric panel heaters over the local LAN using the Tuya protocol. No cloud dependency at runtime.
 
+> Working on this repo (human or AI)? Read **[AGENTS.md](./AGENTS.md)** first — it documents the connection model, the Tuya v3.4 "wedge", the local `tuyapi` patch, and the secrets rules.
+
 ---
 
 ## Features
@@ -10,7 +12,8 @@ Homey Pro app for controlling **ECOSO Torr** hardwired electric panel heaters ov
 - Set target temperature (5–35 °C)
 - Switch between Low and High power modes
 - Live room temperature reading
-- 30-second automatic polling
+- Child lock
+- State pushed by the heater, with a 120-second poll as a safety net
 
 ---
 
@@ -19,12 +22,13 @@ Homey Pro app for controlling **ECOSO Torr** hardwired electric panel heaters ov
 - Homey Pro (Early 2023 or later) — `platforms: ["local"]` only
 - ECOSO Torr heaters connected to your Wi-Fi network
 - Device ID, IP address, and local encryption key for each heater (see below)
+- Heaters reachable from the Homey on the LAN (they may be blocked from the internet)
 
 ---
 
 ## Device credentials
 
-Credentials live in `devices.json` (gitignored). Format:
+Credentials live in `devices.json` (gitignored — **never commit it**). Format:
 
 ```json
 {
@@ -56,30 +60,34 @@ Alternatively, use mitmproxy to intercept them from the ECOSO mobile app — see
 ## Project structure
 
 ```
-app.ts                  Homey app entry point
-app.json                Homey app manifest
+app.ts                  Homey app entry point (mode Flow action)
+app.json                Full Homey manifest — app + driver definition + settings
 drivers/
   ecoso_torr/
     driver.ts           Pairing — returns a placeholder device
-    device.ts           Device lifecycle, capabilities, 30s polling
+    device.ts           Device lifecycle, capabilities, 120s poll, write readback
 lib/
   heater.ts             EcosoHeater class — all LAN control logic
   scanner.ts            UDP LAN scanner (CLI use only)
 src/
-  index.ts              CLI test harness (not bundled in Homey app)
+  index.ts              CLI test harness (dev only, not bundled)
+patches/
+  tuyapi+7.7.1.patch    Local patch for a tuyapi bug (see AGENTS.md)
 devices.json            Local credentials (gitignored)
 ```
+
+There are no `*.compose.json` files — the entire manifest is the single root `app.json`.
 
 ---
 
 ## Scripts
 
 ```sh
-npm run typecheck          # TypeScript type-check with no output
+npm run typecheck          # type-check the app and the CLI
 npm run build              # compile TypeScript → .homeybuild/
 npm run validate           # validate app manifest at publish level
 npm run homey:install      # build + install to Homey Pro (use this for testing)
-npm run dev                # homey app run (dev mode — LAN blocked, see note below)
+npm run dev                # homey app run (container — not LAN-faithful, see notes)
 ```
 
 ### CLI test harness
@@ -92,10 +100,11 @@ npm run cli -- --device 1 on             # power on
 npm run cli -- --device 1 off            # power off
 npm run cli -- --device 1 temp 20        # set target temperature
 npm run cli -- --device 1 mode high      # set High power mode
+npm run cli -- --device 1 lock           # child lock
 npm run cli -- --device 1 discover       # dump raw DP values
 ```
 
-`--device 2` targets the second heater. Defaults to device 1.
+`--device 2` targets the second heater. Omit it to target both.
 
 ---
 
@@ -107,6 +116,7 @@ npm run cli -- --device 1 discover       # dump raw DP values
    - **Device ID** — from `devices.json` (`id`)
    - **IP Address** — from `devices.json` (`ip`)
    - **Local Key** — from `devices.json` (`key`)
+   - **Protocol Version** — `3.4`
 4. Save — the device will come online and start reporting temperature
 
 Repeat for the second heater.
@@ -115,17 +125,48 @@ Repeat for the second heater.
 
 ## Development notes
 
+### Connection model (important)
+
+The heaters do **not** tolerate connection churn. Tuya v3.4 devices that receive a
+fresh TCP connection (and key negotiation) per operation will eventually start
+rejecting *all* local connections — Tuya error **914** — until they are physically
+power-cycled. This is the single most important constraint in the project.
+
+The app therefore keeps **one long-lived Tuya session per heater**, shared by every
+read and write, with single-flight connects, operation/connect timeouts, and
+exponential backoff (15 s → 5 min). State is driven by packets the device **pushes**;
+the 120-second poll is only a safety net. See [AGENTS.md](./AGENTS.md) §5.
+
 ### `homey app run` vs `homey app install`
 
-`homey app run` runs in a Podman bridge container (`10.88.0.0/16`) that **blocks all outbound TCP to private LAN addresses** (192.168.x.x). Any connection attempt to a local device will get `ECONNREFUSED` immediately. External HTTPS still works.
+`homey app run` starts the app in a Podman bridge container on your Mac. That
+container **cannot reliably reach the private LAN** — a TCP connection to the device
+may appear to connect and then the Tuya handshake stalls or resets. A failure there
+does **not** mean the device, IP, or key is wrong.
 
-`homey app install` (production mode) has full LAN access. **Always use `npm run homey:install` when testing device communication.**
+Use one of these instead:
 
-### Tuya protocol v3.4
+- `homey app run --remote` — runs **on the Homey** (faithful), for live logs
+- `npm run homey:install` — permanent production install
 
-- A fresh `TuyAPI` instance is created per call — reusing a disconnected instance causes reconnect failures
-- `device.find()` is skipped when the IP is known — it uses UDP broadcasts which don't work in containers
-- Set commands use `shouldWaitForResponse: false`; state is read back after 1.2 s
+Both `run` modes **uninstall the app when they exit**, so finish with
+`npm run homey:install`.
+
+### Tuya protocol v3.4 and `tuyapi`
+
+`tuyapi` 7.7.1 has a sequence-counter bug: an unsolicited device packet (such as the
+status push after a `SET`) desynchronises the client's counter, after which the next
+`get()`/`set()` hangs. This is patched locally via `patches/tuyapi+7.7.1.patch`
+(applied automatically by `postinstall`) and reported upstream as
+[codetheweb/tuyapi#709](https://github.com/codetheweb/tuyapi/pull/709). Do not remove
+the patch until a fixed release exists — see [AGENTS.md](./AGENTS.md) §6.
+
+### Secrets
+
+`devices.json`, `.env`, and `OPENCODE-LOCAL.md` are gitignored and must stay out of
+the packed app bundle. Beware: because the TypeScript compiler writes into
+`.homeybuild/`, an *imported* JSON file would bypass `.homeyignore` and ship with the
+app. Always verify the bundle before publishing — see [AGENTS.md](./AGENTS.md) §7.
 
 ### DP map
 
@@ -135,8 +176,6 @@ Repeat for the second heater.
 | 2  | Lock         | boolean | Child lock             |
 | 3  | Temp_set     | integer | Target °C (5–35)       |
 | 4  | Temp_current | integer | Room °C (read-only)    |
-| 5  | Timer        | integer | Countdown (minutes)    |
-| 6  | FAULT        | bitmap  | Fault flags (read-only)|
+| 5  | Timer        | integer | Countdown (minutes), not exposed |
+| 6  | FAULT        | bitmap  | Fault flags (read-only), not exposed |
 | 7  | Mode         | enum    | `"Low"` / `"High"`     |
-
-
