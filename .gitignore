@@ -16,6 +16,9 @@ devices.json
 # Tuya cloud credentials
 .env
 
+# Private handover details for local coding agents
+OPENCODE-LOCAL.md
+
 # tinytuya scan output (may contain device IDs)
 snapshot.json
 tinytuya.json
