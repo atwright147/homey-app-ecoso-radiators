@@ -136,11 +136,16 @@ software fix once it is wedged. The wedge survives app restarts and Homey reboot
 - **One long-lived `TuyAPI` session per heater**, reused for every operation.
 - **Single-flight `connect()`** — concurrent callers share one negotiation.
 - **Exponential backoff** after failures: 15 s, 30 s, 60 s … capped at 5 min.
-- **Timeouts**: 10 s connect, 8 s per operation.
+- **Timeouts**: 10 s connect, 8 s per operation. A *single* unanswered read is a
+  **soft** failure — the session is kept and no backoff is started, because an
+  unsolicited device packet can leave a read unmatched even though the socket is
+  perfectly healthy (see §6). Only **two consecutive** timeouts drop the socket
+  and start the backoff. Dropping the session for one stray timeout is itself
+  churn, which is the thing this design exists to avoid.
 - **No per-call reconnect**, and state is driven by the device's **pushed**
   packets (`data` / `dp-refresh` events) rather than aggressive polling.
 - The Homey driver polls only every **120 s** as a safety net and does a one-shot
-  readback after a write.
+  readback 2 s after a write.
 
 > Historical note: the app previously created a `TuyAPI` instance per operation and
 > polled every 30 s. That churn is what wedged the heaters. Do not go back to it.
@@ -157,12 +162,12 @@ software fix once it is wedged. The wedge survives app restarts and Homey reboot
 
 ## 6. `tuyapi` is patched — do not lose the patch
 
-**Bug:** tuyapi only advances its outgoing sequence counter (`_currentSequenceN`)
-when *it* sends a packet. Tuya devices also advance their own counter for
-**unsolicited** packets — notably the `STATUS`/`DP_REFRESH` push sent right after a
-`SET`. After that push the client's next request reuses a consumed sequence number,
-the device replies on a different one, no resolver matches, and the pending
-`get()`/`set()` **hangs** (until the socket is recycled).
+**Bug 1 — the counter desyncs.** tuyapi only advances its outgoing sequence
+counter (`_currentSequenceN`) when *it* sends a packet. Tuya devices advance
+their own counter for **unsolicited** packets too — notably the `STATUS` push
+sent right after a `SET`. After that push the client's next request reuses a
+consumed sequence number, the device replies on a different one, no resolver
+matches, and the pending `get()` **hangs**.
 
 Observed trace on a v3.4 heater:
 
@@ -176,22 +181,61 @@ GET     -> request seq 53898 ; device replies seq 53899 -> no match -> HANG
 Effect here: the post-write readback always timed out, which dropped the shared
 session and backed off after **every** capability change.
 
-**Fix:** re-sync `_currentSequenceN` from every received packet in
-`_packetHandler()` (forward-only, so it stays monotonic; safe for the session-key
-handshake because the `SESS_KEY_NEG_RES` branch still rebases with `sequenceN - 1`).
+**Bug 2 — the deeper one.** The device does **not** echo the sequence number we
+sent. It numbers its replies with *its own* counter, which drifts as soon as it
+sends an unsolicited packet — and it can even assign the numbers in a different
+order than the requests arrived. So matching purely on the sequence number is
+unsound: a reply can arrive on a number we never registered (the read hangs), or
+on a number that collides with a *different* pending request (the read resolves
+with **another request's payload** — observed as a `getState()` returning all
+`null`). Trace of the collision, from the rapid-fire test:
+
+```
+SET -> our seq 46670        GET -> our seq 46671
+rx cmd=16 pktSeq=46670      <- the GET's reply, numbered from the DEVICE's counter
+rx cmd=13 pktSeq=46671      <- the SET's ack, on the GET's number
+```
+
+**The fix (a four-part patch):**
+
+1. **Re-sync the counter** from every received packet in `_packetHandler()`
+   (forward-only, so it stays monotonic; safe for the session-key handshake
+   because the `SESS_KEY_NEG_RES` branch still rebases with `sequenceN - 1`).
+2. **Record each request's command byte** on its resolver (`_send(buffer,
+   commandByte)`), so a response can be matched even when the number is off.
+3. **Match query responses by command byte** (`DP_QUERY`/`DP_QUERY_NEW`), via
+   `_newestResolverFor()`, taking the newest outstanding request of that
+   command. A packet that merely collides on the sequence number can no longer
+   resolve a query with the wrong payload.
+4. **Drain resolvers that will never match again.** The `CONTROL`/`CONTROL_NEW`
+   ack path returned without deleting its resolver, so every `SET` leaked one
+   entry for the life of the session (and every timed-out read leaked one more).
+   The ack now settles and drops it, located by command byte.
 
 **How it is applied:** `patches/tuyapi+7.7.1.patch` + a `postinstall: patch-package`
-script. It is re-applied automatically by `npm install`. If you ever see
-`get()` hang after a `set()`, first check the patch is present:
+script. It is re-applied automatically by `npm install`. If a read hangs after a
+`set()`, first check the patch is present:
 
 ```sh
 grep -n "Keep our outgoing sequence counter" node_modules/tuyapi/index.js
+grep -n "_newestResolverFor" node_modules/tuyapi/index.js
 npm run postinstall            # force re-apply if missing
 ```
 
-**Upstream:** proposed as codetheweb/tuyapi **PR #709**. If it is merged and
-released, upgrade `tuyapi`, delete `patches/tuyapi+7.7.1.patch`, and remove the
-`postinstall` script. Related upstream PR: #707 (leaked `get()` resolvers).
+To confirm the patch itself is still valid after editing it, round-trip it —
+`npx patch-package --reverse && npx patch-package` — and check the file is
+reproduced.
+
+**Upstream:** the counter re-sync (part 1) is proposed as codetheweb/tuyapi
+**PR #709**; parts 2–4 are local hardening and are *not* upstream. If #709 is
+merged and released, re-evaluate — the local patch would still be needed for
+parts 2–4 unless upstream adopts them. Related upstream PR: #707 (leaked `get()`
+resolvers — the same class of bug as part 4).
+
+> A single unanswered read is **not** treated as a connection failure any more:
+> `lib/heater.ts` keeps the session on the first timeout and only drops it (and
+> backs off) after two consecutive ones. See §5.
+
 
 > The patch is applied to `node_modules/`, which the Homey CLI copies into the
 > bundle — so the fix ships with the app. It is also why the build must run after

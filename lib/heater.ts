@@ -73,10 +73,23 @@ const OPERATION_TIMEOUT_MS = 8_000;  // a single read/write
 const BASE_BACKOFF_MS = 15_000;      // start backing off after the first failure
 const MAX_BACKOFF_MS = 5 * 60_000;   // cap retry interval at 5 minutes
 
+/**
+ * Raised when an operation got no answer in time. This is NOT the same as a
+ * connection failure: the socket is normally still healthy, the request just
+ * went unanswered. It is a distinct type so `run()` can tell the two apart and
+ * keep the session instead of recycling it (see the note there).
+ */
+export class HeaterTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HeaterTimeoutError';
+  }
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
-      () => reject(new Error(`${label} timed out after ${ms} ms`)),
+      () => reject(new HeaterTimeoutError(`${label} timed out after ${ms} ms`)),
       ms,
     );
     promise.then(
@@ -96,6 +109,7 @@ export class EcosoHeater extends EventEmitter {
   private connectInFlight: Promise<TuyAPI> | null = null;
   private failureCount = 0;
   private nextAttemptAt = 0;
+  private timeoutStreak = 0;
   private closed = false;
 
   constructor(config: HeaterConfig) {
@@ -194,8 +208,20 @@ export class EcosoHeater extends EventEmitter {
 
   /**
    * Ensure a live session, run `fn` against it with a timeout, and keep the
-   * session for next time. On any failure, escalate the backoff and drop the
-   * socket so the next attempt starts a clean negotiation.
+   * session for next time.
+   *
+   * A *timeout* is deliberately treated as a soft failure. A request can go
+   * unanswered even though the socket is perfectly healthy: these v3.4 devices
+   * number their replies from their own counter, so a reply can arrive on a
+   * sequence number we did not expect — or not arrive at all if the device is
+   * being pushed hard. That is not a reason to recycle the connection, and doing
+   * so is exactly the connection churn that wedges these heaters (see the
+   * connection model at the top of this file). The client re-syncs its sequence
+   * counter from the next packet the device sends, so the session recovers on
+   * its own.
+   *
+   * Two unanswered operations in a row is a different story, and is treated as
+   * a real failure (drop the socket, start the backoff).
    */
   private async run<T>(fn: (device: TuyAPI) => Promise<T>): Promise<T> {
     const device = await this.connect();
@@ -208,6 +234,10 @@ export class EcosoHeater extends EventEmitter {
       this.noteSuccess();
       return result;
     } catch (err) {
+      if (err instanceof HeaterTimeoutError && ++this.timeoutStreak < 2) {
+        this.emit('operation-timeout', err);
+        throw err;
+      }
       this.noteFailure();
       this.dropDevice();
       throw err;
@@ -303,6 +333,7 @@ export class EcosoHeater extends EventEmitter {
   private noteSuccess(): void {
     this.failureCount = 0;
     this.nextAttemptAt = 0;
+    this.timeoutStreak = 0;
   }
 
   private noteFailure(): void {

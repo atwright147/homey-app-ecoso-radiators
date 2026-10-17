@@ -167,8 +167,13 @@ Both `run` modes **uninstall the app when they exit**, so finish with
 
 `tuyapi` 7.7.1 has a sequence-counter bug: an unsolicited device packet (such as the
 status push after a `SET`) desynchronises the client's counter, after which the next
-`get()`/`set()` hangs. This is patched locally via `patches/tuyapi+7.7.1.patch`
-(applied automatically by `postinstall`) and reported upstream as
+`get()`/`set()` hangs. These heaters number their replies from their *own* counter
+rather than echoing ours, so a reply can also arrive on a sequence number that
+collides with a different pending request and be resolved with the wrong payload.
+This is patched locally via `patches/tuyapi+7.7.1.patch` (applied automatically by
+`postinstall`): the client re-syncs its counter from every received packet, records
+each request's command byte, matches query responses by that command byte, and
+drops resolvers that will never match. The counter re-sync is reported upstream as
 [codetheweb/tuyapi#709](https://github.com/codetheweb/tuyapi/pull/709). Do not remove
 the patch until a fixed release exists — see [AGENTS.md](./AGENTS.md) §6.
 
