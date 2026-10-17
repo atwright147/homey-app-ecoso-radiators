@@ -13,7 +13,8 @@
     "cli:state": "tsx src/index.ts --device 1 state",
     "cli:state2": "tsx src/index.ts --device 2 state",
     "scan": ".venv/bin/python3 -m tinytuya scan",
-    "get-keys": ".venv/bin/python3 get-keys.py"
+    "get-keys": ".venv/bin/python3 get-keys.py",
+    "postinstall": "patch-package"
   },
   "keywords": [],
   "author": "",
@@ -25,6 +26,7 @@
   "devDependencies": {
     "@types/homey": "npm:homey-apps-sdk-v3-types@^0.3.12",
     "@types/node": "^25.5.0",
+    "patch-package": "^8.0.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   }
